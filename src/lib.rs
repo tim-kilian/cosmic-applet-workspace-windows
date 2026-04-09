@@ -20,7 +20,9 @@ use cosmic::{
     widget::{self, autosize, container},
 };
 
-use wayland::{WaylandUpdate, WorkspaceWindow, focus_window, workspace_windows_subscription};
+use wayland::{
+    WaylandUpdate, WorkspaceWindow, close_window, focus_window, workspace_windows_subscription,
+};
 
 const APP_ID: &str = "io.github.tkilian.CosmicAppletAppTitle";
 const HORIZONTAL_MAX_CHARS: usize = 24;
@@ -49,6 +51,7 @@ pub struct Applet {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    CloseWindow(ExtForeignToplevelHandleV1),
     FocusWindow(ExtForeignToplevelHandleV1),
     Wayland(WaylandUpdate),
 }
@@ -126,6 +129,7 @@ impl Applet {
                 })),
         )
         .interaction(mouse::Interaction::Idle)
+        .on_middle_press(Message::CloseWindow(handle.clone()))
         .on_press(Message::FocusWindow(handle))
         .into()
     }
@@ -186,6 +190,9 @@ impl cosmic::Application for Applet {
 
     fn update(&mut self, message: Self::Message) -> app::Task<Self::Message> {
         match message {
+            Message::CloseWindow(handle) => {
+                close_window(handle);
+            }
             Message::FocusWindow(handle) => {
                 focus_window(handle);
             }

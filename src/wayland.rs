@@ -52,6 +52,7 @@ pub struct WorkspaceWindow {
 #[derive(Debug, Clone)]
 pub enum WaylandRequest {
     Activate(ExtForeignToplevelHandleV1),
+    Close(ExtForeignToplevelHandleV1),
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,17 @@ pub fn focus_window(handle: ExtForeignToplevelHandleV1) {
 
     if let Some(sender) = sender {
         let _ = sender.send(WaylandRequest::Activate(handle));
+    }
+}
+
+pub fn close_window(handle: ExtForeignToplevelHandleV1) {
+    let sender = WAYLAND_REQUEST_TX
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+
+    if let Some(sender) = sender {
+        let _ = sender.send(WaylandRequest::Close(handle));
     }
 }
 
@@ -477,6 +489,13 @@ fn wayland_event_loop(
         .insert_source(requests, |event, (), state| match event {
             calloop::channel::Event::Msg(WaylandRequest::Activate(handle)) => {
                 state.activate_toplevel(&handle);
+            }
+            calloop::channel::Event::Msg(WaylandRequest::Close(handle)) => {
+                if let Some(cosmic_toplevel) = state.cosmic_toplevel(&handle) {
+                    if let Some(manager_state) = state.toplevel_manager_state.as_ref() {
+                        manager_state.manager.close(&cosmic_toplevel);
+                    }
+                }
             }
             calloop::channel::Event::Closed => {}
         })
