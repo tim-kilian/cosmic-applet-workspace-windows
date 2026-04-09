@@ -46,13 +46,16 @@ struct DisplayWindow {
 pub struct Applet {
     core: cosmic::app::Core,
     desktop_cache: DesktopEntryCache,
+    hovered_window: Option<ExtForeignToplevelHandleV1>,
     windows: Vec<DisplayWindow>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    ClearHoveredWindow(ExtForeignToplevelHandleV1),
     CloseWindow(ExtForeignToplevelHandleV1),
     FocusWindow(ExtForeignToplevelHandleV1),
+    HoverWindow(ExtForeignToplevelHandleV1),
     Wayland(WaylandUpdate),
 }
 
@@ -96,6 +99,10 @@ impl Applet {
         content = content.push(self.core.applet.text(text));
 
         let is_active = window.is_active;
+        let is_hovered = self
+            .hovered_window
+            .as_ref()
+            .is_some_and(|hovered| hovered == &window.handle);
         let handle = window.handle.clone();
 
         widget::mouse_area(
@@ -103,15 +110,35 @@ impl Applet {
                 .padding([2, 8])
                 .class(theme::Container::custom(move |theme| {
                     let cosmic = theme.cosmic();
-                    let (background, foreground) = if is_active {
+                    let (background, foreground, border_color, border_width) = if is_active {
                         (
-                            cosmic.accent_button.base.into(),
+                            if is_hovered {
+                                cosmic.accent_button.hover.into()
+                            } else {
+                                cosmic.accent_button.base.into()
+                            },
                             cosmic.accent_button.on.into(),
+                            if is_hovered {
+                                cosmic.accent.base.into()
+                            } else {
+                                iced::Color::TRANSPARENT
+                            },
+                            if is_hovered { 1.0 } else { 0.0 },
                         )
                     } else {
                         (
-                            cosmic.background.component.base.into(),
+                            if is_hovered {
+                                cosmic.background.component.hover.into()
+                            } else {
+                                cosmic.background.component.base.into()
+                            },
                             cosmic.background.component.on.into(),
+                            if is_hovered {
+                                cosmic.bg_divider().into()
+                            } else {
+                                iced::Color::TRANSPARENT
+                            },
+                            if is_hovered { 1.0 } else { 0.0 },
                         )
                     };
 
@@ -121,6 +148,8 @@ impl Applet {
                         background: Some(iced::Background::Color(background)),
                         border: iced::Border {
                             radius: cosmic.corner_radii.radius_s.into(),
+                            color: border_color,
+                            width: border_width,
                             ..Default::default()
                         },
                         shadow: Default::default(),
@@ -129,6 +158,8 @@ impl Applet {
                 })),
         )
         .interaction(mouse::Interaction::Idle)
+        .on_enter(Message::HoverWindow(handle.clone()))
+        .on_exit(Message::ClearHoveredWindow(handle.clone()))
         .on_middle_press(Message::CloseWindow(handle.clone()))
         .on_press(Message::FocusWindow(handle))
         .into()
@@ -170,6 +201,7 @@ impl cosmic::Application for Applet {
             Self {
                 core,
                 desktop_cache: DesktopEntryCache::new(fde::get_languages_from_env()),
+                hovered_window: None,
                 windows: Vec::new(),
             },
             app::Task::none(),
@@ -190,11 +222,23 @@ impl cosmic::Application for Applet {
 
     fn update(&mut self, message: Self::Message) -> app::Task<Self::Message> {
         match message {
+            Message::ClearHoveredWindow(handle) => {
+                if self
+                    .hovered_window
+                    .as_ref()
+                    .is_some_and(|hovered| hovered == &handle)
+                {
+                    self.hovered_window = None;
+                }
+            }
             Message::CloseWindow(handle) => {
                 close_window(handle);
             }
             Message::FocusWindow(handle) => {
                 focus_window(handle);
+            }
+            Message::HoverWindow(handle) => {
+                self.hovered_window = Some(handle);
             }
             Message::Wayland(update) => match update {
                 WaylandUpdate::WorkspaceWindows(windows) => {
@@ -207,6 +251,12 @@ impl cosmic::Application for Applet {
                             is_active: window.is_active,
                         })
                         .collect();
+
+                    if self.hovered_window.as_ref().is_some_and(|hovered| {
+                        !self.windows.iter().any(|window| &window.handle == hovered)
+                    }) {
+                        self.hovered_window = None;
+                    }
                 }
                 WaylandUpdate::Finished => {
                     tracing::error!("Wayland subscription ended");
