@@ -1,23 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod config;
 mod wayland;
 
 use std::sync::LazyLock;
 
+use config::{AppletConfig, MAX_TITLE_CHARS, MIN_TITLE_CHARS};
 use cosmic::{
     cctk::wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
     Element, app,
-    applet::cosmic_panel_config::PanelAnchor,
     desktop::{
         DesktopEntryCache, DesktopLookupContext, DesktopResolveOptions, IconSourceExt, fde,
         resolve_desktop_entry,
     },
     iced::{
-        self, Alignment, Length, Subscription, event, mouse,
-        widget::{row, space, stack},
+        self, Alignment, Length, Subscription, event, mouse, widget::{row, space, stack},
+        window,
     },
+    surface::action::{app_popup, destroy_popup},
     theme,
-    widget::{self, autosize, container},
+    widget::{self, autosize, container, menu},
 };
 
 use wayland::{
@@ -26,9 +28,10 @@ use wayland::{
 
 const APP_ID: &str = "io.github.tkilian.CosmicAppletAppTitle";
 const CLOSE_ICON_SIZE: u16 = 14;
-const HORIZONTAL_MAX_CHARS: usize = 24;
-const VERTICAL_MAX_CHARS: usize = 14;
 const EMPTY_TITLE: &str = "Desktop";
+const SETTINGS_ICON: &str = "preferences-system-symbolic";
+const CONTEXT_MENU_WIDTH: f32 = 220.0;
+const SETTINGS_POPUP_WIDTH: f32 = 360.0;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
 
@@ -44,29 +47,48 @@ struct DisplayWindow {
     is_active: bool,
 }
 
-pub struct Applet {
+struct Applet {
+    config: AppletConfig,
+    config_dirty: bool,
+    context_menu_popup: Option<window::Id>,
     core: cosmic::app::Core,
+    cursor_in_applet: Option<iced::Point>,
     desktop_cache: DesktopEntryCache,
     hovered_window: Option<ExtForeignToplevelHandleV1>,
+    open_settings_after_menu: bool,
+    settings_popup: Option<window::Id>,
+    source_windows: Vec<WorkspaceWindow>,
     windows: Vec<DisplayWindow>,
 }
 
 #[derive(Debug, Clone)]
-pub enum Message {
+enum Message {
     ClearHoveredWindow(ExtForeignToplevelHandleV1),
     ClearHoveredWindowGlobal,
     CloseWindow(ExtForeignToplevelHandleV1),
     FocusWindow(ExtForeignToplevelHandleV1),
     HoverWindow(ExtForeignToplevelHandleV1),
+    OpenContextMenu,
+    OpenSettingsPopup,
+    PopupClosed(window::Id),
+    SetMaxTitleChars(usize),
+    SetMiddleClickCloses(bool),
+    SetShowAppIcons(bool),
+    SetShowHoverCloseButton(bool),
+    UpdateAppletCursor(iced::Point),
     Wayland(WaylandUpdate),
 }
 
 impl Applet {
-    fn max_chars(&self) -> usize {
-        match self.core.applet.anchor {
-            PanelAnchor::Left | PanelAnchor::Right => VERTICAL_MAX_CHARS,
-            PanelAnchor::Top | PanelAnchor::Bottom => HORIZONTAL_MAX_CHARS,
+    fn persist_config_if_dirty(&mut self) {
+        if self.config_dirty {
+            self.config.save();
+            self.config_dirty = false;
         }
+    }
+
+    fn max_chars(&self) -> usize {
+        self.config.max_title_chars
     }
 
     fn resolve_icon(&mut self, window: &WorkspaceWindow) -> Option<widget::icon::Handle> {
@@ -99,6 +121,171 @@ impl Applet {
         .class(close_button_class(is_active))
         .on_press(Message::CloseWindow(handle))
         .into()
+    }
+
+    fn rebuild_windows(&mut self) {
+        let source_windows = self.source_windows.clone();
+        self.windows = source_windows
+            .iter()
+            .map(|window| DisplayWindow {
+                handle: window.handle.clone(),
+                title: window.title.clone(),
+                icon: if self.config.show_app_icons {
+                    self.resolve_icon(window)
+                } else {
+                    None
+                },
+                is_active: window.is_active,
+            })
+            .collect();
+
+        if self
+            .hovered_window
+            .as_ref()
+            .is_some_and(|hovered| !self.windows.iter().any(|window| &window.handle == hovered))
+        {
+            self.hovered_window = None;
+        }
+    }
+
+    fn settings_panel(&self) -> Element<'_, Message> {
+        let content = widget::container(
+            widget::settings::view_column(vec![
+                widget::text::title4("Workspace Windows").into(),
+                widget::text::caption("Changes apply immediately and are saved automatically.")
+                    .into(),
+                widget::settings::section()
+                    .title("Display")
+                    .add(
+                        widget::settings::item::builder("Show application icons")
+                            .description("Display the desktop icon before each window title.")
+                            .toggler(self.config.show_app_icons, Message::SetShowAppIcons),
+                    )
+                    .add(
+                        widget::settings::item::builder("Maximum title length")
+                            .description("Limit how many characters each window title can use.")
+                            .control(widget::spin_button(
+                                self.config.max_title_chars.to_string(),
+                                self.config.max_title_chars,
+                                1,
+                                MIN_TITLE_CHARS,
+                                MAX_TITLE_CHARS,
+                                Message::SetMaxTitleChars,
+                            )),
+                    )
+                    .into(),
+                widget::settings::section()
+                    .title("Actions")
+                    .add(
+                        widget::settings::item::builder("Hover close button")
+                            .description("Show the round close button when a tile is hovered.")
+                            .toggler(
+                                self.config.show_hover_close_button,
+                                Message::SetShowHoverCloseButton,
+                            ),
+                    )
+                    .add(
+                        widget::settings::item::builder("Middle-click closes windows")
+                            .description("Close a window directly by middle-clicking its tile.")
+                            .toggler(
+                                self.config.middle_click_closes,
+                                Message::SetMiddleClickCloses,
+                            ),
+                    )
+                    .into(),
+            ])
+            .width(Length::Fill),
+        )
+        .padding(16)
+        .width(Length::Fixed(SETTINGS_POPUP_WIDTH));
+
+        self.core.applet.popup_container(content).into()
+    }
+
+    fn context_menu_panel(&self) -> Element<'_, Message> {
+        let content = container(
+            menu::menu_button(vec![
+                widget::icon::from_name(SETTINGS_ICON)
+                    .size(16)
+                    .icon()
+                    .into(),
+                widget::text("Settings").into(),
+                space::horizontal().width(Length::Fill).into(),
+            ])
+            .on_press(Message::OpenSettingsPopup),
+        )
+        .padding([8, 0])
+        .width(Length::Fixed(CONTEXT_MENU_WIDTH));
+
+        self.core.applet.popup_container(content).into()
+    }
+
+    fn open_context_menu_task(&self) -> app::Task<Message> {
+        surface_task(app_popup::<Applet>(
+            |state: &mut Applet| {
+                let new_id = window::Id::unique();
+                state.context_menu_popup = Some(new_id);
+
+                let mut popup_settings = state.core.applet.get_popup_settings(
+                    state
+                        .core
+                        .main_window_id()
+                        .expect("applet main window missing"),
+                    new_id,
+                    None,
+                    None,
+                    None,
+                );
+
+                if let Some(position) = state.cursor_in_applet {
+                    popup_settings.positioner.anchor_rect = iced::Rectangle {
+                        x: position.x.round() as i32,
+                        y: position.y.round() as i32,
+                        width: 1,
+                        height: 1,
+                    };
+                }
+
+                popup_settings
+            },
+            Some(Box::new(|state: &Applet| {
+                state.context_menu_panel().map(cosmic::Action::App)
+            })),
+        ))
+    }
+
+    fn open_settings_task(&self) -> app::Task<Message> {
+        surface_task(app_popup::<Applet>(
+            |state: &mut Applet| {
+                let new_id = window::Id::unique();
+                state.settings_popup = Some(new_id);
+
+                let mut popup_settings = state.core.applet.get_popup_settings(
+                    state
+                        .core
+                        .main_window_id()
+                        .expect("applet main window missing"),
+                    new_id,
+                    None,
+                    None,
+                    None,
+                );
+
+                if let Some(position) = state.cursor_in_applet {
+                    popup_settings.positioner.anchor_rect = iced::Rectangle {
+                        x: position.x.round() as i32,
+                        y: position.y.round() as i32,
+                        width: 1,
+                        height: 1,
+                    };
+                }
+
+                popup_settings
+            },
+            Some(Box::new(|state: &Applet| {
+                state.settings_panel().map(cosmic::Action::App)
+            })),
+        ))
     }
 
     fn window_tile(&self, window: &DisplayWindow, icon_size: f32) -> Element<'_, Message> {
@@ -176,31 +363,38 @@ impl Applet {
                 }
             }));
 
-        let close_button_overlay: Element<'_, Message> = if is_hovered {
-            widget::mouse_area(
-                row![
-                    space::horizontal().width(Length::Fill),
-                    container(Self::close_button(close_handle, is_active)).padding([0, 4])
-                ]
-                .align_y(Alignment::Center)
-                .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .interaction(mouse::Interaction::Idle)
-            .on_exit(Message::ClearHoveredWindow(hover_clear_handle))
-            .into()
-        } else {
-            row![].width(Length::Fill).height(Length::Fill).into()
-        };
+        let close_button_overlay: Element<'_, Message> =
+            if self.config.show_hover_close_button && is_hovered {
+                widget::mouse_area(
+                    row![
+                        space::horizontal().width(Length::Fill),
+                        container(Self::close_button(close_handle, is_active)).padding([0, 4])
+                    ]
+                    .align_y(Alignment::Center)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                )
+                .interaction(mouse::Interaction::Idle)
+                .on_exit(Message::ClearHoveredWindow(hover_clear_handle))
+                .into()
+            } else {
+                row![].width(Length::Fill).height(Length::Fill).into()
+            };
 
-        widget::mouse_area(stack![preview, close_button_overlay])
+        let tile = widget::mouse_area(stack![preview, close_button_overlay])
             .interaction(mouse::Interaction::Idle)
             .on_enter(Message::HoverWindow(hover_handle))
             .on_move(move |_| Message::HoverWindow(hover_move_handle.clone()))
             .on_exit(Message::ClearHoveredWindow(handle.clone()))
-            .on_middle_press(Message::CloseWindow(handle.clone()))
-            .on_press(Message::FocusWindow(handle))
-            .into()
+            .on_press(Message::FocusWindow(handle.clone()));
+
+        let tile = if self.config.middle_click_closes {
+            tile.on_middle_press(Message::CloseWindow(handle.clone()))
+        } else {
+            tile
+        };
+
+        tile.into()
     }
 
     fn empty_tile(&self) -> Element<'_, Message> {
@@ -235,11 +429,19 @@ impl cosmic::Application for Applet {
     const APP_ID: &'static str = APP_ID;
 
     fn init(core: cosmic::app::Core, _flags: Self::Flags) -> (Self, app::Task<Self::Message>) {
+        let config = AppletConfig::load();
         (
             Self {
+                config,
+                config_dirty: false,
+                context_menu_popup: None,
                 core,
+                cursor_in_applet: None,
                 desktop_cache: DesktopEntryCache::new(fde::get_languages_from_env()),
                 hovered_window: None,
+                open_settings_after_menu: false,
+                settings_popup: None,
+                source_windows: Vec::new(),
                 windows: Vec::new(),
             },
             app::Task::none(),
@@ -271,6 +473,7 @@ impl cosmic::Application for Applet {
             }
             Message::ClearHoveredWindowGlobal => {
                 self.hovered_window = None;
+                self.cursor_in_applet = None;
             }
             Message::CloseWindow(handle) => {
                 close_window(handle);
@@ -281,23 +484,75 @@ impl cosmic::Application for Applet {
             Message::HoverWindow(handle) => {
                 self.hovered_window = Some(handle);
             }
+            Message::OpenContextMenu => {
+                if self.settings_popup.is_some() || self.open_settings_after_menu {
+                    return app::Task::none();
+                }
+
+                if let Some(id) = self.context_menu_popup {
+                    return surface_task(destroy_popup(id));
+                }
+
+                return self.open_context_menu_task();
+            }
+            Message::OpenSettingsPopup => {
+                if self.settings_popup.is_some() || self.open_settings_after_menu {
+                    return app::Task::none();
+                }
+
+                if let Some(menu_id) = self.context_menu_popup {
+                    self.open_settings_after_menu = true;
+                    return surface_task(destroy_popup(menu_id));
+                }
+
+                return self.open_settings_task();
+            }
+            Message::PopupClosed(id) => {
+                if self.context_menu_popup == Some(id) {
+                    self.context_menu_popup = None;
+                    if self.open_settings_after_menu {
+                        self.open_settings_after_menu = false;
+                        return self.open_settings_task();
+                    }
+                }
+                if self.settings_popup == Some(id) {
+                    self.settings_popup = None;
+                    self.persist_config_if_dirty();
+                }
+            }
+            Message::SetMaxTitleChars(value) => {
+                let value = value.clamp(MIN_TITLE_CHARS, MAX_TITLE_CHARS);
+                if self.config.max_title_chars != value {
+                    self.config.max_title_chars = value;
+                    self.config_dirty = true;
+                }
+            }
+            Message::SetMiddleClickCloses(value) => {
+                if self.config.middle_click_closes != value {
+                    self.config.middle_click_closes = value;
+                    self.config_dirty = true;
+                }
+            }
+            Message::SetShowAppIcons(value) => {
+                if self.config.show_app_icons != value {
+                    self.config.show_app_icons = value;
+                    self.config_dirty = true;
+                    self.rebuild_windows();
+                }
+            }
+            Message::SetShowHoverCloseButton(value) => {
+                if self.config.show_hover_close_button != value {
+                    self.config.show_hover_close_button = value;
+                    self.config_dirty = true;
+                }
+            }
+            Message::UpdateAppletCursor(position) => {
+                self.cursor_in_applet = Some(position);
+            }
             Message::Wayland(update) => match update {
                 WaylandUpdate::WorkspaceWindows(windows) => {
-                    self.windows = windows
-                        .into_iter()
-                        .map(|window| DisplayWindow {
-                            handle: window.handle.clone(),
-                            title: window.title.clone(),
-                            icon: self.resolve_icon(&window),
-                            is_active: window.is_active,
-                        })
-                        .collect();
-
-                    if self.hovered_window.as_ref().is_some_and(|hovered| {
-                        !self.windows.iter().any(|window| &window.handle == hovered)
-                    }) {
-                        self.hovered_window = None;
-                    }
+                    self.source_windows = windows;
+                    self.rebuild_windows();
                 }
                 WaylandUpdate::Finished => {
                     tracing::error!("Wayland subscription ended");
@@ -337,9 +592,30 @@ impl cosmic::Application for Applet {
         content = content.push(space::vertical().height(Length::Fixed(height)));
 
         let content = container(content).padding([0, self.core.applet.suggested_padding(true).0]);
-
-        autosize::autosize(content, AUTOSIZE_MAIN_ID.clone()).into()
+        widget::mouse_area(autosize::autosize(content, AUTOSIZE_MAIN_ID.clone()))
+            .interaction(mouse::Interaction::Idle)
+            .on_move(Message::UpdateAppletCursor)
+            .on_right_press(Message::OpenContextMenu)
+            .into()
     }
+
+    fn view_window(&self, id: window::Id) -> Element<'_, Self::Message> {
+        if self.settings_popup == Some(id) {
+            self.settings_panel()
+        } else if self.context_menu_popup == Some(id) {
+            self.context_menu_panel()
+        } else {
+            widget::text::body("").into()
+        }
+    }
+
+    fn on_close_requested(&self, id: window::Id) -> Option<Self::Message> {
+        Some(Message::PopupClosed(id))
+    }
+}
+
+fn surface_task(action: cosmic::surface::Action) -> app::Task<Message> {
+    cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(action)))
 }
 
 fn truncate_title(title: &str, max_chars: usize) -> String {

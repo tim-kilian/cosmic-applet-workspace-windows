@@ -882,9 +882,12 @@ dependencies = [
 name = "cosmic-applet-app-title"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "futures",
  "iced_futures 0.14.0 (git+https://github.com/pop-os/libcosmic?rev=a44cff8011d81209e18de86f24da248c88b5a28d)",
  "libcosmic",
+ "serde",
+ "toml",
  "tracing",
  "tracing-log",
  "tracing-subscriber",

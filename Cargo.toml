@@ -7,9 +7,12 @@ license = "GPL-3.0-only"
 description = "COSMIC panel applet that lists windows in the current workspace"
 
 [dependencies]
+dirs = "6.0.0"
 futures = "0.3.31"
 iced_futures = { git = "https://github.com/pop-os/libcosmic", rev = "a44cff8011d81209e18de86f24da248c88b5a28d", package = "iced_futures" }
 libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "a44cff8011d81209e18de86f24da248c88b5a28d", default-features = false, features = ["applet", "desktop", "tokio", "wayland"] }
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.5.11"
 tracing = "0.1.44"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
