@@ -1,8 +1,41 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="128" height="128" viewBox="0 0 128 128" version="1.1" xmlns="http://www.w3.org/2000/svg">
-  <g fill="#000000">
-    <path d="M20 28C20 21.373 25.373 16 32 16H96C102.627 16 108 21.373 108 28V86C108 92.627 102.627 98 96 98H68L44 112V98H32C25.373 98 20 92.627 20 86V28ZM32 24C29.791 24 28 25.791 28 28V86C28 88.209 29.791 90 32 90H52V97.874L65.848 90H96C98.209 90 100 88.209 100 86V28C100 25.791 98.209 24 96 24H32Z"/>
-    <rect x="36" y="38" width="56" height="8" rx="4"/>
-    <rect x="36" y="58" width="34" height="8" rx="4"/>
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="20" y1="14" x2="108" y2="114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#194768"/>
+      <stop offset="1" stop-color="#0F263A"/>
+    </linearGradient>
+    <linearGradient id="active-chip" x1="20" y1="44" x2="108" y2="68" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FBFE"/>
+      <stop offset="1" stop-color="#E2EBF5"/>
+    </linearGradient>
+    <linearGradient id="passive-chip" x1="20" y1="76" x2="76" y2="94" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D7E1EC"/>
+      <stop offset="1" stop-color="#C0CFDE"/>
+    </linearGradient>
+    <filter id="shadow" x="8" y="8" width="112" height="112" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#08131D" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <rect x="14" y="14" width="100" height="100" rx="28" fill="url(#bg)"/>
   </g>
+
+  <path d="M30 28C30 25.791 31.791 24 34 24H94C96.209 24 98 25.791 98 28V32C98 34.209 96.209 36 94 36H34C31.791 36 30 34.209 30 32V28Z" fill="#F4F8FC" fill-opacity="0.18"/>
+
+  <rect x="20" y="44" width="88" height="24" rx="12" fill="url(#active-chip)"/>
+  <rect x="20" y="44" width="88" height="24" rx="12" stroke="#2EC4B6" stroke-width="2"/>
+  <circle cx="34" cy="56" r="5" fill="#24B8A9"/>
+  <rect x="44" y="51" width="42" height="10" rx="5" fill="#C8D5E2"/>
+  <rect x="90" y="51" width="10" height="10" rx="5" fill="#96ABC1"/>
+
+  <rect x="20" y="76" width="56" height="18" rx="9" fill="url(#passive-chip)"/>
+  <circle cx="32" cy="85" r="4" fill="#F59E0B"/>
+  <rect x="40" y="81" width="22" height="8" rx="4" fill="#A8BACD"/>
+
+  <rect x="82" y="76" width="26" height="18" rx="9" fill="#27445E"/>
+  <rect x="82" y="76" width="26" height="18" rx="9" stroke="#4E6F8B" stroke-width="1.5"/>
+  <rect x="91" y="84" width="8" height="2" rx="1" fill="#F8FBFE"/>
+  <rect x="94" y="81" width="2" height="8" rx="1" fill="#F8FBFE"/>
 </svg>
