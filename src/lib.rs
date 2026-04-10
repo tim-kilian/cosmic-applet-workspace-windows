@@ -11,6 +11,7 @@ use std::{
 use config::{AppletConfig, MAX_TITLE_CHARS, MIN_TITLE_CHARS};
 use cosmic::{
     Apply, Element, app,
+    applet::cosmic_panel_config::PanelAnchor,
     cctk::{
         wayland_client::Proxy,
         wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
@@ -169,6 +170,7 @@ enum Message {
     SetMaxTitleChars(usize),
     SetMiddleClickCloses(bool),
     SetShowAppIcons(bool),
+    Surface(cosmic::surface::Action),
     SetWindowMaximized(ExtForeignToplevelHandleV1, bool),
     UpdateAppletCursor(iced::Point),
     Wayland(WaylandUpdate),
@@ -191,6 +193,23 @@ impl Applet {
             self.config.max_title_chars
         } else {
             usize::MAX
+        }
+    }
+
+    fn is_side_panel(&self) -> bool {
+        matches!(
+            self.core.applet.anchor,
+            PanelAnchor::Left | PanelAnchor::Right
+        )
+    }
+
+    fn panel_padding(&self) -> (u16, u16) {
+        let (major_padding, minor_padding) = self.core.applet.suggested_padding(true);
+
+        if self.core.applet.is_horizontal() {
+            (major_padding, minor_padding)
+        } else {
+            (minor_padding, major_padding)
         }
     }
 
@@ -1353,7 +1372,6 @@ impl Applet {
     }
 
     fn window_tile(&self, window: &DisplayWindow, icon_size: f32) -> Element<'_, Message> {
-        let text = self.displayed_title(&window.title);
         let mut content = row![]
             .align_y(Alignment::Center)
             .spacing(TILE_INNER_SPACING);
@@ -1366,7 +1384,9 @@ impl Applet {
             );
         }
 
-        content = content.push(self.core.applet.text(text));
+        if !self.is_side_panel() || window.icon.is_none() {
+            content = content.push(self.core.applet.text(self.displayed_title(&window.title)));
+        }
 
         let is_active = window.is_active;
         let is_dragging = self
@@ -1451,7 +1471,28 @@ impl Applet {
             tile
         };
 
-        tile.into()
+        let tile: Element<'_, Message> = tile.into();
+
+        if self.is_side_panel() && window.icon.is_some() {
+            let tooltip = if window.title.trim().is_empty() {
+                window.app_name.clone()
+            } else {
+                window.title.clone()
+            };
+
+            self.core
+                .applet
+                .applet_tooltip(
+                    tile,
+                    tooltip,
+                    self.active_ephemeral_popup_id().is_some() || self.settings_popup.is_some(),
+                    Message::Surface,
+                    self.core.main_window_id(),
+                )
+                .into()
+        } else {
+            tile
+        }
     }
 
     fn empty_tile(&self) -> Element<'_, Message> {
@@ -1663,6 +1704,9 @@ impl cosmic::Application for Applet {
                     self.rebuild_windows();
                 }
             }
+            Message::Surface(action) => {
+                return surface_task(action);
+            }
             Message::SetWindowMaximized(handle, maximized) => {
                 return self.queue_or_run_menu_action(DeferredMenuAction::WindowControl(
                     WindowControlAction::SetMaximized(handle, maximized),
@@ -1719,39 +1763,67 @@ impl cosmic::Application for Applet {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        let height = (self.core.applet.suggested_size(true).1
-            + 2 * self.core.applet.suggested_padding(true).1) as f32;
+        let (horizontal_padding, vertical_padding) = self.panel_padding();
         let icon_size = self.core.applet.suggested_size(true).0 as f32;
-        let mut content = row![]
-            .align_y(Alignment::Center)
-            .spacing(TILE_SPACING)
-            .clip(true);
+        let content: Element<'_, Message> = if self.core.applet.is_horizontal() {
+            let height = (self.core.applet.suggested_size(true).1 + 2 * vertical_padding) as f32;
+            let mut content = row![]
+                .align_y(Alignment::Center)
+                .spacing(TILE_SPACING)
+                .clip(true);
 
-        if self.windows.is_empty() {
-            content = content.push(self.empty_tile());
+            if self.windows.is_empty() {
+                content = content.push(self.empty_tile());
+            } else {
+                let layout = self.visible_window_layout(icon_size);
+
+                if let Some(hidden_count) = layout.leading_summary {
+                    content = content
+                        .push(self.overflow_tile(hidden_count, OverflowSummarySide::Leading));
+                }
+
+                for window in &self.windows[layout.start..=layout.end] {
+                    content = content.push(self.window_tile(window, icon_size));
+                }
+
+                if let Some(hidden_count) = layout.trailing_summary {
+                    content = content
+                        .push(self.overflow_tile(hidden_count, OverflowSummarySide::Trailing));
+                }
+            }
+
+            content = content.push(space::vertical().height(Length::Fixed(height)));
+
+            container(content)
+                .padding([0, horizontal_padding])
+                .clip(true)
+                .into()
         } else {
-            let layout = self.visible_window_layout(icon_size);
+            let side_margin = (horizontal_padding / 2).max(4);
+            let width = (self.core.applet.suggested_size(true).0 + 2 * horizontal_padding) as f32;
+            let mut items = Vec::new();
 
-            if let Some(hidden_count) = layout.leading_summary {
-                content =
-                    content.push(self.overflow_tile(hidden_count, OverflowSummarySide::Leading));
+            if self.windows.is_empty() {
+                items.push(self.empty_tile());
+            } else {
+                for window in &self.windows {
+                    items.push(self.window_tile(window, icon_size));
+                }
             }
 
-            for window in &self.windows[layout.start..=layout.end] {
-                content = content.push(self.window_tile(window, icon_size));
-            }
+            items.push(space::horizontal().width(Length::Fixed(width)).into());
 
-            if let Some(hidden_count) = layout.trailing_summary {
-                content =
-                    content.push(self.overflow_tile(hidden_count, OverflowSummarySide::Trailing));
-            }
-        }
+            container(
+                widget::column::with_children(items)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .spacing(TILE_SPACING)
+                    .clip(true),
+            )
+            .padding([vertical_padding, side_margin])
+            .clip(true)
+            .into()
+        };
 
-        content = content.push(space::vertical().height(Length::Fixed(height)));
-
-        let content = container(content)
-            .padding([0, self.core.applet.suggested_padding(true).0])
-            .clip(true);
         widget::mouse_area(self.core.applet.autosize_window(content))
             .interaction(mouse::Interaction::Idle)
             .on_move(Message::UpdateAppletCursor)
