@@ -3,6 +3,12 @@
 This applet adds a per-output window list to the COSMIC panel. Each instance shows the windows in
 the currently active workspace for that panel's output, and highlights the active window.
 
+## Screenshot
+
+Example applet layout in the COSMIC panel:
+
+![Workspace Windows applet screenshot](docs/screenshots/workspace-windows-example.png)
+
 ## Build
 
 ```bash
