@@ -21,10 +21,22 @@ cargo build --release
 ./scripts/install-local.sh
 ```
 
+Or with `just`:
+
+```bash
+just install
+```
+
 Then restart the panel:
 
 ```bash
 pkill -x cosmic-panel
+```
+
+Or:
+
+```bash
+just restart-panel
 ```
 
 The install script writes an absolute `Exec=` path into the local desktop file because some COSMIC
