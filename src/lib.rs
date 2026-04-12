@@ -116,6 +116,7 @@ enum DeferredMenuAction {
     FocusWindow(ExtForeignToplevelHandleV1),
     LaunchDesktopAction(WindowMenuAction),
     WindowControl(WindowControlAction),
+    WindowControlThenFocus(WindowControlAction, ExtForeignToplevelHandleV1),
 }
 
 #[derive(Debug, Clone)]
@@ -605,6 +606,11 @@ impl Applet {
             }
             DeferredMenuAction::WindowControl(action) => {
                 Self::perform_window_control(action);
+                app::Task::none()
+            }
+            DeferredMenuAction::WindowControlThenFocus(action, handle) => {
+                Self::perform_window_control(action);
+                focus_window(handle);
                 app::Task::none()
             }
         }
@@ -1720,9 +1726,22 @@ impl cosmic::Application for Applet {
                 return surface_task(action);
             }
             Message::SetWindowMaximized(handle, maximized) => {
-                return self.queue_or_run_menu_action(DeferredMenuAction::WindowControl(
-                    WindowControlAction::SetMaximized(handle, maximized),
-                ));
+                let should_focus = maximized
+                    && self
+                        .windows
+                        .iter()
+                        .find(|window| window.handle == handle)
+                        .is_some_and(|window| !window.is_active);
+
+                let action = WindowControlAction::SetMaximized(handle.clone(), maximized);
+
+                if should_focus {
+                    return self.queue_or_run_menu_action(
+                        DeferredMenuAction::WindowControlThenFocus(action, handle),
+                    );
+                }
+
+                return self.queue_or_run_menu_action(DeferredMenuAction::WindowControl(action));
             }
             Message::UpdateAppletCursor(position) => {
                 self.cursor_in_applet = Some(position);
